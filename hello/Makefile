@@ -12,6 +12,7 @@ MODULE_NAME = test
 CFLAGS += -Ilib
 CLFLAGS = -Llib
 LIBS = -lpthread -lm -lhello
+BINARY_REMOTE:=https://github.com/koolproxy/koolproxy-bin/raw/master
 
 DEPEND_FILES = $(patsubst %.c, %.o, $(wildcard *.c))
 
@@ -21,7 +22,6 @@ all:$(MODULE_NAME)
 $(MODULE_NAME): $(DEPEND_FILES) $(LIB_NAME)
 	@echo "	compile $(MODULE_NAME)"
 	@$(LD) $(CLFLAGS) -o $@ $< $(LIBS)
-
 clean:
 	@echo "	clean $(MODULE_NAME)"
 	@rm -f $(MODULE_NAME) *.o lib/*.a lib/*.o

@@ -5,6 +5,7 @@
  * 2016/07/09 [W.J]@Shanghai
  */
 #include <stdio.h>
+#include <hello.h>
 
 void hello(void)
 {
