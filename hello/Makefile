@@ -12,7 +12,6 @@ MODULE_NAME = test
 CFLAGS += -Ilib
 CLFLAGS = -Llib
 LIBS = -lpthread -lm -lhello
-BINARY_REMOTE:=https://github.com/koolproxy/koolproxy-bin/raw/master
 
 DEPEND_FILES = $(patsubst %.c, %.o, $(wildcard *.c))
 
