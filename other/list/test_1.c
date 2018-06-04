@@ -43,5 +43,5 @@ static struct select_operations ops = {
 };
 
 
-select_init(ops, 102)
+SELECT_INIT(ops, 102);
 
