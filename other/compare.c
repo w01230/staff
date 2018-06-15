@@ -18,7 +18,7 @@ int main(int argc, char *argv[])
 
 	printf("%d\n", MIN(a, b));
 	a = 5;
-	printf("%d %d %d\n", a++, a++, ++a);
-
+	printf("%d\n", MIN(a--, --a));
+	
 	return 0;
 }
