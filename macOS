@@ -1,0 +1,9 @@
+reset privacy
+
+tccutil can only clear apps currently given access to certain classes of protected data. It cannot be used to add or enable apps in those classes. It is used in one of two forms:
+tccutil reset service
+clears all current settings for the named service, or
+tccutil reset service bundleID
+clears the bundle identified by bundleID, e.g. co.eclecticlight.myApp, from the named service.
+
+Named services currently include: Accessibility AddressBook AppleEvents (for Automation) Calendar Camera Microphone Photos Reminders All.
