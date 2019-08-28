@@ -7,3 +7,4 @@ tccutil reset service bundleID
 clears the bundle identified by bundleID, e.g. co.eclecticlight.myApp, from the named service.
 
 Named services currently include: Accessibility AddressBook AppleEvents (for Automation) Calendar Camera Microphone Photos Reminders All.
+tmutil listlocalsnapshots
