@@ -6,7 +6,7 @@
     "harddrive": {
         "model": "VMware Virtual NVMe Disk",
         "path": "/dev/nvme0n1",
-        "size": "64G"
+        "size": "128G"
     },
     "hostname": "archlinux",
     "kernels": [
@@ -15,29 +15,25 @@
     "keyboard-language": "us",
     "mirror-region": {
         "China": {
-            "https://mirrors.bfsu.edu.cn/archlinux/$repo/os/$arch": true,
-            "https://mirrors.cqu.edu.cn/archlinux/$repo/os/$arch": true,
-            "https://mirrors.nju.edu.cn/archlinux/$repo/os/$arch": true,
-            "https://mirrors.sjtug.sjtu.edu.cn/archlinux/$repo/os/$arch": true,
-            "https://mirrors.tuna.tsinghua.edu.cn/archlinux/$repo/os/$arch": true,
-            "https://mirrors.ustc.edu.cn/archlinux/$repo/os/$arch": true,
-            "https://mirrors.xjtu.edu.cn/archlinux/$repo/os/$arch": true
+            "https://mirrors.aliyun.com/archlinux/$repo/os/$arch": true,
+            "https://mirrors.cloud.tencent.con/archlinux/$repo/os/$arch": true,
+            "https://mirrors.ustc.edu.cn/archlinux/$repo/os/$arch": true
         }
     },
     "nic": {
-        "nic": "ens192"
+        "nic": "ens160"
     },
     "ntp": true,
-    "packages": [],
+    "packages": [net-tools, nfs-utils, samba, vim, open-vm-tools],
     "profile": null,
     "script": "guided",
-    "superusers": {
-        "jun": {
-            "!password": "******"
-        }
-    },
+    "superusers": {},
     "sys-encoding": "utf-8",
     "sys-language": "en_US",
     "timezone": "Asia/Shanghai",
-    "users": {}
+    "users": {
+         "jun": {
+            "!password": "******"
+        }       
+    }
 }
