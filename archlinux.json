@@ -24,7 +24,7 @@
         "nic": "ens160"
     },
     "ntp": true,
-    "packages": [net-tools, nfs-utils, samba, vim, open-vm-tools],
+    "packages": [“net-tools”, “nfs-utils”, “samba”, “vim”, “open-vm-tools”],
     "profile": null,
     "script": "guided",
     "superusers": {},
