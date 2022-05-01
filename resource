@@ -3,3 +3,4 @@ https://www.tvpartstoday.com
 just my socks
 PUZZLE-M901/902 Openwrt router
 https://fuckcloudnative.io/posts/linux-circumvent/#span-idinline-toc2span-通过-nftables-实现智能分流
+https://liujiacai.net/blog/2022/04/30/modern-c/
