@@ -1,2 +1,2 @@
 enforce=none
-qemu-img create -f vmdk -o subformat=monolithicFlat,zeroed_grain=on VMDK-data-disk.vmdk 2G
+qemu-img create -f vmdk -o adapter_type=lsilogic,subformat=monolithicFlat,zeroed_grain=on VMDK-data-disk.vmdk 2G
