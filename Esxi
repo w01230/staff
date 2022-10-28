@@ -1,2 +1,4 @@
 enforce=none
 qemu-img create -f vmdk -o adapter_type=lsilogic,subformat=monolithicFlat,zeroed_grain=on VMDK-data-disk.vmdk 2G
+qemu-img convert chr-7.6.img -O vmdk -o adapter_type=lsilogic,subformat=monolithicFlat,compat6 routeros.vmdk
+
