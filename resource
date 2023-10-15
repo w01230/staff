@@ -7,6 +7,7 @@ https://zimuku.org
 https://www.pexels.com/
 https://www.torrentleech.org/torrents/browse/index/categories/29
 https://www.btnull.org
+https://ping0.cc/vpsmon/24hour
 
 find . -type f -name "*.mp4" -exec ffmpeg -ss 00:00:23 -i {} -c copy {}.mp4 \;
 find . -type f -name "*.mp4" -exec ffmpeg -i {} -threads 12 -preset ultrafast -vf "delogo=x=1690:y=700:w=229:h=99:enable='between(t,00,15)'" {}.mp4 \;
