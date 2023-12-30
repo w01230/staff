@@ -10,7 +10,7 @@ https://www.btnull.org
 https://ping0.cc/vpsmon/24hour
 https://icon.kitchen
 https://replit.com/@misaka-blog/wgcf-profile-generator
-NetFront/apernet/misak
+NetFront/aperture/misaka
 
 find . -type f -name "*.mp4" -exec ffmpeg -ss 00:00:23 -i {} -c copy {}.mp4 \;
 find . -type f -name "*.mp4" -exec ffmpeg -i {} -threads 12 -preset ultrafast -vf "delogo=x=1690:y=700:w=229:h=99:enable='between(t,00,15)'" {}.mp4 \;
