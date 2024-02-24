@@ -12,7 +12,7 @@ https://ping0.cc/vpsmon/24hour
 https://icon.kitchen
 https://replit.com/@misaka-blog/wgcf-profile-generator
 NetFront/aperture/misaka
-
+http://jinfuyun.cn
 linux dns local host nsswitch.conf 
 
 find . -type f -name "*.mp4" -exec ffmpeg -ss 00:00:23 -i {} -c copy {}.mp4 \;
