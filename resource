@@ -21,3 +21,6 @@ ffmpeg -i *.mp4 sample.jpg -ss 00:00:05  -r 1 -vframes 1 -an -vcodec mjpeg
 
 <HUAWEI> system-view
 [HUAWEI] http secure-server ssl-policy users
+
+HPE FAN
+curl --request PATCH --url 'https://ilo5/redfish/v1/Chassis/1/Thermal/' --user 'user:password' --header 'content-type: application/json' --insecure --data '{"Oem": {"Hpe": {"FanPercentAdjust": 20}}}'
