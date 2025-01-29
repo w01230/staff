@@ -26,3 +26,9 @@ HPE FAN
 curl --request PATCH --url 'https://ilo5/redfish/v1/Chassis/1/Thermal/' --user 'user:password' --header 'content-type: application/json' --insecure --data '{"Oem": {"Hpe": {"FanPercentAdjust": 20}}}'
 
 http://sh.nekoneko.cloud/bbr/bbr.sh
+
+# 关闭 Cursor
+pkill -f "Cursor"
+# 删除更新目录并创建阻止文件
+rm -rf ~/Library/Application\ Support/cursor-updater
+touch ~/Library/Application\ Support/cursor-updater
