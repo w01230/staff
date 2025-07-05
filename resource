@@ -1,5 +1,6 @@
 http://ftpmirror.uk/pub/Software/vSphere/v7.0/
 https://vmware.digiboy.ir/9.X/
+https://repo.siber.net.id/?berkas=VMware%2F9.0&sort=size&order=desc
 https://www.tvpartstoday.com
 https://liujiacai.net/blog/2022/04/30/modern-c/
 /etc/sysctl.d/sysctl.conf kernel.printk = 3 4 1 4
