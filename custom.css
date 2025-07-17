@@ -1,0 +1,28 @@
+.monaco-workbench .part.activitybar.left {
+  padding-top: 20px !important;
+}
+
+/* 1. 隐藏原生 Title Bar 后的自定义容器 */
+.monaco-workbench .custom-ui-titlebar,
+.monaco-workbench > .custom-ui-surface,
+/* 2. 有 Tab 时的标签区 & 无 Tab 时的空白区 */
+.monaco-workbench .tabs-container,
+.monaco-workbench .tabs-and-actions-container,
+/* 3. 左侧 Activity Bar 整体 & 空白区 */
+.monaco-workbench .part.activitybar.left,
+.monaco-workbench .part.activitybar.left .content,
+/* 4. 侧边栏顶端（Explorer/Search 标题） */
+.monaco-workbench .sidebar .composite.title,
+.monaco-workbench .viewlet .composite.title {
+  -webkit-app-region: drag !important;
+}
+
+
+/* 所有操作按钮、图标、输入框、Action Bar */
+.monaco-workbench .monaco-action-bar,
+.monaco-workbench .monaco-action-bar *,
+.monaco-workbench button,
+.monaco-workbench input {
+  -webkit-app-region: no-drag !important;
+}
+
