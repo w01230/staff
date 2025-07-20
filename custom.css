@@ -17,6 +17,10 @@
   -webkit-app-region: drag !important;
 }
 
+/* 确保每个标签页可点击 */
+.monaco-workbench .tabs-container .tab {
+  -webkit-app-region: no-drag !important;
+}
 
 /* 所有操作按钮、图标、输入框、Action Bar */
 .monaco-workbench .monaco-action-bar,
