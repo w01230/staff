@@ -4,7 +4,7 @@ filetype on                              " 开启文件类型检测
 
 set encoding=utf-8                       " 编码设置
 set number                               " 显示行号
-"set relativenumber                       " 显示相对行号
+set relativenumber                       " 显示相对行号
 set smartindent                          " 智能缩进
 set autoindent                           " 自动对齐
 
@@ -22,7 +22,7 @@ set clipboard=unnamed                    " 共享剪切板
 
 set nocompatible                         " 去除vi一致性
 set ambiwidth=double                     " 解决中文标点显示的问题
-set nowrap                               " 不自动折行
+"set nowrap                               " 不自动折行
 set mouse=a                              " 使用鼠标
 set mousehide                            " 输入时隐藏光标
 set sidescroll=10                        " 移动到看不见的字符时，自动向右滚动是个字符
