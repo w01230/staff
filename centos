@@ -4,3 +4,8 @@ sudo dnf install -y https://mirror.stream.centos.org/10-stream/BaseOS/x86_64/os/
 sudo dnf install -y https://mirror.stream.centos.org/SIGs/10-stream/extras/x86_64/extras-common/Packages/e/epel-release-10-2.el10s.noarch.rpm --allowerasing
 
 sudo dnf --releasever=10 --allowerasing --setopt=deltarpm=false distro-sync -y
+
+sudo rpm -e gpg-pubkey-8483c65d-*
+sudo curl -L -o /etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-official https://www.centos.org/keys/RPM-GPG-KEY-CentOS-Official
+sudo rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-official
+sudo yum clean all
