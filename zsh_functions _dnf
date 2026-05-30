@@ -1,0 +1,49 @@
+#compdef dnf
+
+# 定义 DNF 的核心一级子命令
+local -a subcommands
+subcommands=(
+    'update:Update Homebrew repositories (metadata) and check upgrades'
+    'upgrade:Upgrade all outdated packages using DNF style'
+    'install:Install a new package'
+    'remove:Uninstall an installed package'
+    'erase:Alias for remove'
+    'uninstall:Alias for remove'
+    'search:Search for packages'
+    'list:List all installed packages'
+    'clean:Clean cache and old package versions'
+)
+
+# 核心参数路由解析
+_arguments -C \
+    '1: :->command' \
+    '*: :->args'
+
+case $state in
+    command)
+        _describe -t commands 'dnf subcommand' subcommands
+        ;;
+    args)
+        case $words[1] in
+            install|search)
+                # 当输入 install 或 search 时，Tab 键自动拉取 Homebrew 远端所有可用的包名
+                # 使用缓存机制防止每次按 Tab 都卡顿
+                local -a formulae
+                formulae=($(brew formulae))
+                _wanted formulae expl 'formula' compadd -a formulae
+                ;;
+            remove|erase|uninstall)
+                # 当输入 remove 时，Tab 键只列出你电脑上“已经安装”的软件包，非常智能
+                local -a installed_formulae
+                installed_formulae=($(brew list --formula -1 2>/dev/null))
+                _wanted installed_formulae expl 'installed formula' compadd -a installed_formulae
+                ;;
+            clean)
+                # 当输入 clean 时，子参数只提示 all
+                local -a clean_args
+                clean_args=('all:Clean all cached downloads and old versions')
+                _describe -t clean_args 'clean argument' clean_args
+                ;;
+        esac
+        ;;
+esac
