@@ -3,6 +3,13 @@
 # 开启 Zsh 的 sh 兼容本地选项（确保局部变量和数组切片稳定）
 emulate -L zsh
 
+# 拦截 Ctrl+C，确保在任何时候用户强行退出时，都能完美恢复终端光标
+cleanup() {
+    printf "\033[?25h"
+    exit 130
+}
+trap cleanup SIGINT SIGTERM
+
 local ARCH="noarch"
 [[ "$(uname -m)" == "arm64" ]] && ARCH="arm64" || ARCH="x86_64"
 
@@ -20,47 +27,48 @@ show_progress() {
     local message="$1"
     local pid="$2"
 
-    # 隐藏光标，防止刷新时闪烁
+    if (( COLUMNS < 78 )); then
+        printf "  %s...\n" "$message"
+        while kill -0 "$pid" 2>/dev/null; do sleep 0.5; done
+        return 0
+    fi
+
     printf "\033[?25l"
 
     local count=0
-    # 当后台进程运行时，保持在同一行循环
     while kill -0 "$pid" 2>/dev/null; do
-        # 1. 动态生成点（0 到 5 个点循环：. -> .. -> ...）
         local dots=""
         for ((i=0; i<(count % 6); i++)); do dots+="."; done
-
-        # 2. 拼接左侧内容（信息 + 点）
         local left_content="  ${message}${dots}"
-
-        # 3. 使用 %-70s 固定左侧总宽度，迫使光标永远停在第 70 列
-        #    \r 回到行首，\033[K 清除旧行，确保绝不换行
         printf "\r%-70s\033[K" "$left_content"
-
         ((count++))
         sleep 0.3
     done
 
-    # 4. 事务成功：最终一行重绘，完美右对齐输出 [  OK  ]
-    printf "\r  %-70s[\033[32m  OK  \033[0m]\n" "$message"
+    wait "$pid"
+    local exit_status=$?
 
-    # 恢复光标显示
+    if (( exit_status == 0 )); then
+        printf "\r  %-70s[\033[32m  OK  \033[0m]\n" "$message"
+    else
+        printf "\r  %-70s[\033[31mFAILED\033[0m]\n" "$message"
+        printf "\033[?25h"
+        return 1
+    fi
+
     printf "\033[?25h"
 }
 
 case "$1" in
     update)
         echo "Updating Subscription Management repositories."
-
-        # 强制在当前上下文彻底关闭 MONITOR，并重定向标准错误
         unsetopt MONITOR 2>/dev/null
-
-        # 异步运行更新并显示进度
         HOMEBREW_NO_ENV_HINTS=1 brew update -q >/dev/null 2>&1 &
-        show_progress "Metadata cache refreshed successfully" $!
-
+        if ! show_progress "Metadata cache refreshed successfully" $! ; then
+            echo "\n\033[31mError: Subscription repository update failed.\033[0m"
+            exit 1
+        fi
         echo ""
-        # 自动路由到 upgrade 逻辑，展示可更新的表格
         $0 upgrade
         ;;
 
@@ -69,7 +77,6 @@ case "$1" in
         local outdated_data
         outdated_data=$(brew outdated --formula --verbose 2>/dev/null | sed '/^[[:space:]]*$/d')
 
-        # 修复：如果没有可更新的包，直接清爽输出并退出，不再打印多余的分割线
         if [[ -z "$outdated_data" ]]; then
             echo "Nothing to do."
             return 0
@@ -79,10 +86,7 @@ case "$1" in
         printf " %-25s %-12s %-18s %-15s %-10s\n" "Package" "Arch" "Version" "Repository" "Size"
         print_line
 
-        # 提取升级列表包名
         local pkg_list=""
-
-        # 避免在管道中修改变量，改用 Herestring
         while read -r line; do
             local pkg=$(echo "$line" | awk '{print $1}')
             pkg_list+="$pkg "
@@ -105,17 +109,19 @@ case "$1" in
 
         if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
             echo "\nRunning transaction"
-
-            # 全局关闭监控，防止弹出后台 PID
             unsetopt MONITOR 2>/dev/null
 
-            # 阶段 1：静默下载
             HOMEBREW_NO_ENV_HINTS=1 brew fetch --formula ${=pkg_list} >/dev/null 2>&1 &
-            show_progress "Preparing applications for transaction" $!
+            if ! show_progress "Preparing applications for transaction" $! ; then
+                echo "\n\033[31mError: Failed to download packages.\033[0m"
+                exit 1
+            fi
 
-            # 阶段 2：静默安装
             HOMEBREW_NO_ENV_HINTS=1 brew upgrade --formula -q >/dev/null 2>&1 &
-            show_progress "Upgrading packages" $!
+            if ! show_progress "Upgrading packages" $! ; then
+                echo "\n\033[31mError: Transaction failed during upgrade.\033[0m"
+                exit 1
+            fi
 
             print_line
             echo "Complete!"
@@ -124,8 +130,171 @@ case "$1" in
         fi
         ;;
 
+    search)
+        if [[ -z "$2" ]]; then
+            echo "Error: Search argument required."
+            echo "Usage: $0 search <keyword>"
+            exit 1
+        fi
+        echo "Matched: $2"
+        local search_raw
+        search_raw=$(brew search --eval-all --desc "$2" 2>/dev/null | grep -v '==> Casks')
+        if [[ -z "$search_raw" ]]; then
+            echo "No matches found."
+            exit 0
+        fi
+        print_line
+        printf " %-30s %-12s %-35s\n" "Name" "Arch" "Summary"
+        print_line
+        echo "$search_raw" | while read -r line; do
+            [[ -z "$line" || "$line" =~ "^==>" ]] && continue
+            local name="${line%%:*}"
+            local desc="${line#*:}"
+            desc="$(echo "$desc" | sed -e 's/^[[:space:]]*//')"
+            if (( ${#desc} > 40 )); then desc="${desc:0:37}..."; fi
+            printf " %-30s %-12s %-35s\n" "$name" "$ARCH" "$desc"
+        done
+        ;;
+
+    install)
+        if [[ -z "$2" ]]; then
+            echo "Error: Package name required."
+            echo "Usage: $0 install <package_name>"
+            exit 1
+        fi
+        shift
+        local pkgs=("$@")
+
+        print_header
+        print_line
+        printf " %-25s %-12s %-18s %-15s %-10s\n" "Package" "Arch" "Version" "Repository" "Size"
+        print_line
+
+        for p in "${pkgs[@]}"; do
+            local ver_info
+            ver_info=$(brew info --formula "$p" 2>/dev/null | head -n 1 | awk '{print $3}')
+            if [[ -z "$ver_info" ]]; then ver_info="stable"; fi
+            printf " %-25s %-12s %-18s %-15s %-10s\n" "$p" "$ARCH" "$ver_info" "@homebrew" "--"
+        done
+
+        print_line
+        echo "Transaction Summary"
+        print_line
+        echo "Install  ${#pkgs[@]} Packages"
+        echo ""
+
+        echo -n "Is this ok [y/N]: "
+        local response
+        read -r response < /dev/tty
+        if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+            echo "\nRunning transaction"
+            unsetopt MONITOR 2>/dev/null
+
+            HOMEBREW_NO_ENV_HINTS=1 brew fetch --formula "${pkgs[@]}" >/dev/null 2>&1 &
+            show_progress "Preparing applications for transaction" $!
+
+            HOMEBREW_NO_ENV_HINTS=1 brew install -q "${pkgs[@]}" >/dev/null 2>&1 &
+            show_progress "Installing packages" $!
+
+            print_line
+            echo "Complete!"
+        else
+            echo "Operation aborted."
+        fi
+        ;;
+
+    remove|erase|uninstall)
+        if [[ -z "$2" ]]; then
+            echo "Error: Package name required."
+            echo "Usage: $0 remove <package_name>"
+            exit 1
+        fi
+        shift
+        local pkgs=("$@")
+
+        print_header
+        print_line
+        printf " %-25s %-12s %-18s %-15s %-10s\n" "Package" "Arch" "Version" "Repository" "Size"
+        print_line
+        for p in "${pkgs[@]}"; do
+            printf " %-25s %-12s %-18s %-15s %-10s\n" "$p" "$ARCH" "removing" "@homebrew" "--"
+        done
+        print_line
+        echo "Transaction Summary"
+        print_line
+        echo "Remove  ${#pkgs[@]} Packages"
+        echo ""
+
+        echo -n "Is this ok [y/N]: "
+        local response
+        read -r response < /dev/tty
+        if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+            echo "\nRunning transaction"
+            unsetopt MONITOR 2>/dev/null
+
+            HOMEBREW_NO_ENV_HINTS=1 brew uninstall -q "${pkgs[@]}" >/dev/null 2>&1 &
+            show_progress "Erasing packages" $!
+
+            print_line
+            echo "Complete!"
+        else
+            echo "Operation aborted."
+        fi
+        ;;
+
+    list)
+        local list_raw
+        list_raw=$(brew list --formula -1 2>/dev/null)
+
+        if [[ -z "$list_raw" ]]; then
+            echo "No packages installed."
+            return 0
+        fi
+
+        # 如果提供了可选的过滤关键字（例如 dnf list git）
+        if [[ -n "$2" ]]; then
+            list_raw=$(echo "$list_raw" | grep "$2")
+            if [[ -z "$list_raw" ]]; then
+                echo "No matching packages found."
+                return 0
+            fi
+        fi
+
+        echo "Installed Packages"
+        print_line
+        printf " %-35s %-15s %-20s\n" "Package Name" "Architecture" "Repository"
+        print_line
+
+        echo "$list_raw" | while read -r pkg; do
+            printf " %-35s %-15s %-20s\n" "$pkg" "$ARCH" "@anaconda-or-homebrew"
+        done
+        ;;
+
+    clean)
+        if [[ "$2" == "all" ]]; then
+            echo "Cleaning up Homebrew cache and downloads..."
+            unsetopt MONITOR 2>/dev/null
+            brew cleanup -s >/dev/null 2>&1 &
+            show_progress "Cache repositories cleared successfully" $!
+            rm -rf "$(brew --cache)" 2>/dev/null
+            echo "Complete!"
+        else
+            echo "Usage: $0 clean all"
+        fi
+        ;;
+
     *)
-        echo "Usage: $0 {update|upgrade}"
-        exit 1
+        # 展示完美的 DNF 帮助列表
+        echo "Usage: dnf <command> [arguments]"
+        echo ""
+        echo "Available Commands:"
+        echo "  clean             -- Clean cache and old package versions"
+        echo "  install           -- Install a new package"
+        echo "  list              -- List all installed packages"
+        echo "  remove/uninstall  -- Uninstall an installed package"
+        echo "  search            -- Search for packages"
+        echo "  update            -- Update Homebrew repositories (metadata) and check upgrades"
+        echo "  upgrade           -- Upgrade all outdated packages using DNF style"
+        return 0
         ;;
 esac
