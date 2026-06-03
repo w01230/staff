@@ -1,50 +1,131 @@
-#compdef dnf
+#!/usr/bin/env zsh
 
-# 定义 DNF 的核心一级子命令
-local -a subcommands
-subcommands=(
-    'update:Update Homebrew repositories (metadata) and check upgrades'
-    'upgrade:Upgrade all outdated packages using DNF style'
-    'install:Install a new package'
-    'remove:Uninstall an installed package'
-    'erase:Alias for remove'
-    'uninstall:Alias for remove'
-    'search:Search for packages'
-    'list:List all installed packages'
-    'clean:Clean cache and old package versions'
-)
+# 开启 Zsh 的 sh 兼容本地选项（确保局部变量和数组切片稳定）
+emulate -L zsh
 
-# 核心参数路由解析
-_arguments -C \
-    '1: :->command' \
-    '*: :->args'
+local ARCH="noarch"
+[[ "$(uname -m)" == "arm64" ]] && ARCH="arm64" || ARCH="x86_64"
 
-case $state in
-    command)
-        _describe -t commands 'dnf subcommand' subcommands
+print_header() {
+    echo "Last metadata expiration check: $(date '+%Y-%m-%d %H:%M:%S')."
+    echo "Dependencies resolved."
+}
+
+print_line() {
+    echo "================================================================================"
+}
+
+# 仿 DNF 风格的单行原地刷新进度条
+show_progress() {
+    local message="$1"
+    local pid="$2"
+
+    # 隐藏光标，防止刷新时闪烁
+    printf "\033[?25l"
+
+    local count=0
+    # 当后台进程运行时，保持在同一行循环
+    while kill -0 "$pid" 2>/dev/null; do
+        # 1. 动态生成点（0 到 5 个点循环：. -> .. -> ...）
+        local dots=""
+        for ((i=0; i<(count % 6); i++)); do dots+="."; done
+
+        # 2. 拼接左侧内容（信息 + 点）
+        local left_content="  ${message}${dots}"
+
+        # 3. 使用 %-70s 固定左侧总宽度，迫使光标永远停在第 70 列
+        #    \r 回到行首，\033[K 清除旧行，确保绝不换行
+        printf "\r%-70s\033[K" "$left_content"
+
+        ((count++))
+        sleep 0.3
+    done
+
+    # 4. 事务成功：最终一行重绘，完美右对齐输出 [  OK  ]
+    printf "\r  %-70s[\033[32m  OK  \033[0m]\n" "$message"
+
+    # 恢复光标显示
+    printf "\033[?25h"
+}
+
+case "$1" in
+    update)
+        echo "Updating Subscription Management repositories."
+
+        # 强制在当前上下文彻底关闭 MONITOR，并重定向标准错误
+        unsetopt MONITOR 2>/dev/null
+
+        # 异步运行更新并显示进度
+        HOMEBREW_NO_ENV_HINTS=1 brew update -q >/dev/null 2>&1 &
+        show_progress "Metadata cache refreshed successfully" $!
+
+        echo ""
+        # 自动路由到 upgrade 逻辑，展示可更新的表格
+        $0 upgrade
         ;;
-    args)
-        case $words[1] in
-            install|search)
-                # 当输入 install 或 search 时，Tab 键自动拉取 Homebrew 远端所有可用的包名
-                # 使用缓存机制防止每次按 Tab 都卡顿
-                local -a formulae
-                formulae=($(brew formulae))
-                _wanted formulae expl 'formula' compadd -a formulae
-                ;;
-            remove|erase|uninstall)
-                # 当输入 remove 时，Tab 键只列出你电脑上“已经安装”的软件包，非常智能
-                local -a installed_formulae
-                installed_formulae=($(brew list --formula -1 2>/dev/null))
-                _wanted installed_formulae expl 'installed formula' compadd -a installed_formulae
-                ;;
-            clean)
-                # 当输入 clean 时，子参数只提示 all
-                local -a clean_args
-                clean_args=('all:Clean all cached downloads and old versions')
-                _describe -t clean_args 'clean argument' clean_args
-                ;;
-        esac
+
+    upgrade)
+        print_header
+        local outdated_data
+        outdated_data=$(brew outdated --formula --verbose 2>/dev/null | sed '/^[[:space:]]*$/d')
+
+        # 修复：如果没有可更新的包，直接清爽输出并退出，不再打印多余的分割线
+        if [[ -z "$outdated_data" ]]; then
+            echo "Nothing to do."
+            return 0
+        fi
+
+        print_line
+        printf " %-25s %-12s %-18s %-15s %-10s\n" "Package" "Arch" "Version" "Repository" "Size"
+        print_line
+
+        # 提取升级列表包名
+        local pkg_list=""
+
+        # 避免在管道中修改变量，改用 Herestring
+        while read -r line; do
+            local pkg=$(echo "$line" | awk '{print $1}')
+            pkg_list+="$pkg "
+            local current_ver=$(echo "$line" | awk '{print $2}' | tr -d '()')
+            local new_ver=$(echo "$line" | awk '{print $4}')
+            printf " %-25s %-12s %-18s %-15s %-10s\n" "$pkg" "$ARCH" "${current_ver}->${new_ver}" "@homebrew" "--"
+        done <<< "$outdated_data"
+
+        print_line
+        echo "Transaction Summary"
+        print_line
+
+        local total_pkgs=$(echo "$outdated_data" | wc -l | tr -d ' ')
+        echo "Upgrade  $total_pkgs Packages"
+        echo ""
+
+        echo -n "Is this ok [y/N]: "
+        local response
+        read -r response < /dev/tty
+
+        if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+            echo "\nRunning transaction"
+
+            # 全局关闭监控，防止弹出后台 PID
+            unsetopt MONITOR 2>/dev/null
+
+            # 阶段 1：静默下载
+            HOMEBREW_NO_ENV_HINTS=1 brew fetch --formula ${=pkg_list} >/dev/null 2>&1 &
+            show_progress "Preparing applications for transaction" $!
+
+            # 阶段 2：静默安装
+            HOMEBREW_NO_ENV_HINTS=1 brew upgrade --formula -q >/dev/null 2>&1 &
+            show_progress "Upgrading packages" $!
+
+            print_line
+            echo "Complete!"
+        else
+            echo "Operation aborted."
+        fi
+        ;;
+
+    *)
+        echo "Usage: $0 {update|upgrade}"
+        exit 1
         ;;
 esac
-
