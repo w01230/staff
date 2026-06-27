@@ -27,10 +27,11 @@ show_progress() {
     local message="$1"
     local pid="$2"
 
-    if (( COLUMNS < 78 )); then
+    if (( ${COLUMNS:-0} < 78 )); then
         printf "  %s...\n" "$message"
         while kill -0 "$pid" 2>/dev/null; do sleep 0.5; done
-        return 0
+        wait "$pid"
+        return $?
     fi
 
     printf "\033[?25l"
@@ -68,14 +69,14 @@ case "$1" in
             echo "\n\033[31mError: Subscription repository update failed.\033[0m"
             exit 1
         fi
-        echo ""
-        $0 upgrade
+        print_line
+        echo "Complete!"
         ;;
 
     upgrade)
         print_header
         local outdated_data
-        outdated_data=$(brew outdated --formula --verbose 2>/dev/null | sed '/^[[:space:]]*$/d')
+        outdated_data=$(brew outdated --verbose 2>/dev/null | sed '/^[[:space:]]*$/d')
 
         if [[ -z "$outdated_data" ]]; then
             echo "Nothing to do."
@@ -111,13 +112,13 @@ case "$1" in
             echo "\nRunning transaction"
             unsetopt MONITOR 2>/dev/null
 
-            HOMEBREW_NO_ENV_HINTS=1 brew fetch --formula ${=pkg_list} >/dev/null 2>&1 &
+            HOMEBREW_NO_ENV_HINTS=1 brew fetch ${=pkg_list} >/dev/null 2>&1 &
             if ! show_progress "Preparing applications for transaction" $! ; then
                 echo "\n\033[31mError: Failed to download packages.\033[0m"
                 exit 1
             fi
 
-            HOMEBREW_NO_ENV_HINTS=1 brew upgrade --formula -q >/dev/null 2>&1 &
+            HOMEBREW_NO_ENV_HINTS=1 brew upgrade -q >/dev/null 2>&1 &
             if ! show_progress "Upgrading packages" $! ; then
                 echo "\n\033[31mError: Transaction failed during upgrade.\033[0m"
                 exit 1
@@ -293,8 +294,8 @@ case "$1" in
         echo "  list              -- List all installed packages"
         echo "  remove/uninstall  -- Uninstall an installed package"
         echo "  search            -- Search for packages"
-        echo "  update            -- Update Homebrew repositories (metadata) and check upgrades"
-        echo "  upgrade           -- Upgrade all outdated packages using DNF style"
+        echo "  update            -- Update Homebrew repositories (metadata)"
+        echo "  upgrade           -- Upgrade all outdated formulae and casks using DNF style"
         return 0
         ;;
 esac
