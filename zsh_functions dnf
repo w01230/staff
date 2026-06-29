@@ -60,6 +60,64 @@ show_progress() {
     printf "\033[?25h"
 }
 
+run_upgrade() {
+    print_header
+    local outdated_data
+    outdated_data=$(brew outdated --verbose 2>/dev/null | sed '/^[[:space:]]*$/d')
+
+    if [[ -z "$outdated_data" ]]; then
+        echo "Nothing to do."
+        return 0
+    fi
+
+    print_line
+    printf " %-25s %-12s %-18s %-15s %-10s\n" "Package" "Arch" "Version" "Repository" "Size"
+    print_line
+
+    local pkg_list=""
+    while read -r line; do
+        local pkg=$(echo "$line" | awk '{print $1}')
+        pkg_list+="$pkg "
+        local current_ver=$(echo "$line" | awk '{print $2}' | tr -d '()')
+        local new_ver=$(echo "$line" | awk '{print $4}')
+        printf " %-25s %-12s %-18s %-15s %-10s\n" "$pkg" "$ARCH" "${current_ver}->${new_ver}" "@homebrew" "--"
+    done <<< "$outdated_data"
+
+    print_line
+    echo "Transaction Summary"
+    print_line
+
+    local total_pkgs=$(echo "$outdated_data" | wc -l | tr -d ' ')
+    echo "Upgrade  $total_pkgs Packages"
+    echo ""
+
+    echo -n "Is this ok [y/N]: "
+    local response
+    read -r response < /dev/tty
+
+    if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+        echo "\nRunning transaction"
+        unsetopt MONITOR 2>/dev/null
+
+        HOMEBREW_NO_ENV_HINTS=1 brew fetch ${=pkg_list} >/dev/null 2>&1 &
+        if ! show_progress "Preparing applications for transaction" $! ; then
+            echo "\n\033[31mError: Failed to download packages.\033[0m"
+            exit 1
+        fi
+
+        HOMEBREW_NO_ENV_HINTS=1 brew upgrade -q >/dev/null 2>&1 &
+        if ! show_progress "Upgrading packages" $! ; then
+            echo "\n\033[31mError: Transaction failed during upgrade.\033[0m"
+            exit 1
+        fi
+
+        print_line
+        echo "Complete!"
+    else
+        echo "Operation aborted."
+    fi
+}
+
 case "$1" in
     update)
         echo "Updating Subscription Management repositories."
@@ -71,64 +129,11 @@ case "$1" in
         fi
         print_line
         echo "Complete!"
+        run_upgrade
         ;;
 
     upgrade)
-        print_header
-        local outdated_data
-        outdated_data=$(brew outdated --verbose 2>/dev/null | sed '/^[[:space:]]*$/d')
-
-        if [[ -z "$outdated_data" ]]; then
-            echo "Nothing to do."
-            return 0
-        fi
-
-        print_line
-        printf " %-25s %-12s %-18s %-15s %-10s\n" "Package" "Arch" "Version" "Repository" "Size"
-        print_line
-
-        local pkg_list=""
-        while read -r line; do
-            local pkg=$(echo "$line" | awk '{print $1}')
-            pkg_list+="$pkg "
-            local current_ver=$(echo "$line" | awk '{print $2}' | tr -d '()')
-            local new_ver=$(echo "$line" | awk '{print $4}')
-            printf " %-25s %-12s %-18s %-15s %-10s\n" "$pkg" "$ARCH" "${current_ver}->${new_ver}" "@homebrew" "--"
-        done <<< "$outdated_data"
-
-        print_line
-        echo "Transaction Summary"
-        print_line
-
-        local total_pkgs=$(echo "$outdated_data" | wc -l | tr -d ' ')
-        echo "Upgrade  $total_pkgs Packages"
-        echo ""
-
-        echo -n "Is this ok [y/N]: "
-        local response
-        read -r response < /dev/tty
-
-        if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
-            echo "\nRunning transaction"
-            unsetopt MONITOR 2>/dev/null
-
-            HOMEBREW_NO_ENV_HINTS=1 brew fetch ${=pkg_list} >/dev/null 2>&1 &
-            if ! show_progress "Preparing applications for transaction" $! ; then
-                echo "\n\033[31mError: Failed to download packages.\033[0m"
-                exit 1
-            fi
-
-            HOMEBREW_NO_ENV_HINTS=1 brew upgrade -q >/dev/null 2>&1 &
-            if ! show_progress "Upgrading packages" $! ; then
-                echo "\n\033[31mError: Transaction failed during upgrade.\033[0m"
-                exit 1
-            fi
-
-            print_line
-            echo "Complete!"
-        else
-            echo "Operation aborted."
-        fi
+        run_upgrade
         ;;
 
     search)
