@@ -1,0 +1,574 @@
+#!/usr/bin/env zsh
+
+# 开启 Zsh 的 sh 兼容本地选项（确保局部变量和数组切片稳定）
+emulate -L zsh
+
+# 拦截 Ctrl+C，确保在任何时候用户强行退出时，都能完美恢复终端光标
+cleanup() {
+    printf "\033[?25h"
+    exit 130
+}
+trap cleanup SIGINT SIGTERM
+
+local ARCH="noarch"
+[[ "$(uname -m)" == "arm64" ]] && ARCH="arm64" || ARCH="x86_64"
+
+print_header() {
+    echo "Last metadata expiration check: $(date '+%Y-%m-%d %H:%M:%S')."
+    echo "Dependencies resolved."
+}
+
+terminal_width() {
+    local width=${COLUMNS:-80}
+    (( width < 85 )) && width=85
+    echo "$width"
+}
+
+print_line() {
+    local width=$(terminal_width)
+    printf "%${width}s\n" "" | tr ' ' '='
+}
+
+print_package_row() {
+    local package="$1"
+    local arch="$2"
+    local version="$3"
+    local repository="$4"
+    local size="$5"
+    local package_width=25
+    local arch_width=12
+    local version_width=18
+    local repository_width=15
+    local size_width=10
+    local base_width=$((package_width + arch_width + version_width + repository_width + size_width + 5))
+    local width=$(terminal_width)
+
+    (( width < base_width )) && width=$base_width
+    package_width=$((package_width + width - base_width))
+
+    printf " %-*.*s %-*.*s %-*.*s %-*.*s %*.*s\n" \
+        "$package_width" "$package_width" "$package" \
+        "$arch_width" "$arch_width" "$arch" \
+        "$version_width" "$version_width" "$version" \
+        "$repository_width" "$repository_width" "$repository" \
+        "$size_width" "$size_width" "$size"
+}
+
+# 仿 DNF 风格的单行原地刷新进度条
+show_progress() {
+    local message="$1"
+    local pid="$2"
+
+    if (( ${COLUMNS:-0} < 78 )); then
+        printf "  %s...\n" "$message"
+        while kill -0 "$pid" 2>/dev/null; do sleep 0.5; done
+        wait "$pid"
+        return $?
+    fi
+
+    printf "\033[?25l"
+
+    local count=0
+    while kill -0 "$pid" 2>/dev/null; do
+        local dots=""
+        for ((i=0; i<(count % 6); i++)); do dots+="."; done
+        local left_content="  ${message}${dots}"
+        printf "\r%-70s\033[K" "$left_content"
+        ((count++))
+        sleep 0.3
+    done
+
+    wait "$pid"
+    local exit_status=$?
+
+    if (( exit_status == 0 )); then
+        printf "\r  %-70s[\033[32m  OK  \033[0m]\n" "$message"
+    else
+        printf "\r  %-70s[\033[31mFAILED\033[0m]\n" "$message"
+        printf "\033[?25h"
+        return 1
+    fi
+
+    printf "\033[?25h"
+}
+
+print_dnf_transaction_line() {
+    local action="$1"
+    local subject="$2"
+    local index="$3"
+    local total="$4"
+    local line_end="${5:-\n}"
+    local suffix="${index}/${total}"
+    local terminal_width=${COLUMNS:-80}
+
+    (( terminal_width < 40 )) && terminal_width=80
+
+    local fixed_width=$((2 + 17 + 2 + 1 + ${#suffix}))
+    local subject_width=$((terminal_width - fixed_width))
+    (( subject_width < 1 )) && subject_width=1
+
+    if (( ${#subject} > subject_width )); then
+        if (( subject_width > 3 )); then
+            subject="${subject[1,$((subject_width - 3))]}..."
+        else
+            subject="${subject[1,$subject_width]}"
+        fi
+    fi
+
+    printf "  %-17s: %-*s %s" "$action" "$subject_width" "$subject" "$suffix"
+    printf "%b" "$line_end"
+}
+
+show_dnf_transaction_progress() {
+    local action="$1"
+    local subject="$2"
+    local index="$3"
+    local total="$4"
+    local pid="$5"
+
+    printf "\033[?25l"
+    print_dnf_transaction_line "$action" "$subject" "$index" "$total" "\033[K"
+
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 0.2
+    done
+
+    wait "$pid"
+    local exit_status=$?
+
+    printf "\r"
+    print_dnf_transaction_line "$action" "$subject" "$index" "$total" "\033[K\n"
+    printf "\033[?25h"
+
+    return "$exit_status"
+}
+
+format_dnf_bytes() {
+    local bytes="${1:-0}"
+
+    if [[ ! "$bytes" =~ '^[0-9]+$' ]] || (( bytes <= 0 )); then
+        printf "%s" "-- B"
+        return
+    fi
+
+    awk -v bytes="$bytes" 'BEGIN {
+        if (bytes >= 1073741824) {
+            printf "%.1f GB", bytes / 1073741824
+        } else if (bytes >= 1048576) {
+            printf "%.1f MB", bytes / 1048576
+        } else if (bytes >= 1024) {
+            printf "%.0f kB", bytes / 1024
+        } else {
+            printf "%d B", bytes
+        }
+    }'
+}
+
+format_dnf_elapsed() {
+    local elapsed="${1:-0}"
+    printf "%02d:%02d" $((elapsed / 60)) $((elapsed % 60))
+}
+
+get_brew_cache_bytes() {
+    local package="$1"
+    local cache_path
+    local cache_kb
+
+    cache_path=$(brew --cache "$package" 2>/dev/null | head -n 1)
+    if [[ -f "$cache_path" ]]; then
+        stat -f %z "$cache_path" 2>/dev/null
+        return
+    fi
+
+    if [[ -d "$cache_path" ]]; then
+        cache_kb=$(du -sk "$cache_path" 2>/dev/null | awk '{print $1}')
+        if [[ "$cache_kb" =~ '^[0-9]+$' ]]; then
+            echo $((cache_kb * 1024))
+            return
+        fi
+    fi
+
+    echo 0
+}
+
+print_dnf_download_line() {
+    local subject="$1"
+    local index="$2"
+    local total="$3"
+    local speed="$4"
+    local size="$5"
+    local elapsed="$6"
+    local line_end="${7:-\n}"
+    local prefix="(${index}/${total}): "
+    local tail
+    local terminal_width=${COLUMNS:-80}
+
+    (( terminal_width < 60 )) && terminal_width=80
+
+    tail=$(printf "%10s | %8s %9s" "$speed" "$size" "$elapsed")
+    local subject_width=$((terminal_width - ${#prefix} - ${#tail}))
+    (( subject_width < 12 )) && subject_width=12
+
+    if (( ${#subject} > subject_width )); then
+        if (( subject_width > 3 )); then
+            subject="${subject[1,$((subject_width - 3))]}..."
+        else
+            subject="${subject[1,$subject_width]}"
+        fi
+    fi
+
+    printf "%s%-*s%s" "$prefix" "$subject_width" "$subject" "$tail"
+    printf "%b" "$line_end"
+}
+
+show_dnf_download_progress() {
+    local subject="$1"
+    local package="$2"
+    local index="$3"
+    local total="$4"
+    local pid="$5"
+    local start_seconds=$SECONDS
+    local elapsed=0
+    local elapsed_text
+    local bytes=0
+    local size_text="-- B"
+    local speed_text="-- B/s"
+
+    printf "\033[?25l"
+    while kill -0 "$pid" 2>/dev/null; do
+        elapsed=$((SECONDS - start_seconds))
+        elapsed_text=$(format_dnf_elapsed "$elapsed")
+        printf "\r"
+        print_dnf_download_line "$subject" "$index" "$total" "$speed_text" "$size_text" "$elapsed_text" "\033[K"
+        sleep 0.2
+    done
+
+    wait "$pid"
+    local exit_status=$?
+    elapsed=$((SECONDS - start_seconds))
+    (( elapsed < 1 )) && elapsed=1
+    elapsed_text=$(format_dnf_elapsed "$elapsed")
+
+    if (( exit_status == 0 )); then
+        bytes=$(get_brew_cache_bytes "$package")
+        size_text=$(format_dnf_bytes "$bytes")
+        if (( bytes > 0 )); then
+            speed_text="$(format_dnf_bytes $((bytes / elapsed)))/s"
+        fi
+    fi
+
+    printf "\r"
+    print_dnf_download_line "$subject" "$index" "$total" "$speed_text" "$size_text" "$elapsed_text" "\033[K\n"
+    printf "\033[?25h"
+    typeset -g DNF_LAST_DOWNLOAD_BYTES="$bytes"
+
+    return "$exit_status"
+}
+
+print_dnf_download_separator() {
+    local terminal_width=${COLUMNS:-80}
+    (( terminal_width < 60 )) && terminal_width=80
+
+    printf "%${terminal_width}s\n" "" | tr ' ' '-'
+}
+
+print_dnf_download_total() {
+    local speed="$1"
+    local size="$2"
+    local elapsed="$3"
+    local terminal_width=${COLUMNS:-80}
+    local tail
+    local label="Total"
+
+    (( terminal_width < 60 )) && terminal_width=80
+
+    tail=$(printf "%10s | %8s %9s" "$speed" "$size" "$elapsed")
+    local label_width=$((terminal_width - ${#tail}))
+    (( label_width < ${#label} + 1 )) && label_width=$((${#label} + 1))
+
+    printf "%-*s%s\n" "$label_width" "$label" "$tail"
+}
+
+run_upgrade() {
+    print_header
+    local outdated_data
+    outdated_data=$(brew outdated --verbose 2>/dev/null | sed '/^[[:space:]]*$/d')
+
+    if [[ -z "$outdated_data" ]]; then
+        echo "Nothing to do."
+        return 0
+    fi
+
+    print_line
+    print_package_row "Package" "Arch" "Version" "Repository" "Size"
+    print_line
+
+    local -a pkg_list upgrade_labels
+    pkg_list=()
+    upgrade_labels=()
+    while read -r line; do
+        local pkg=$(echo "$line" | awk '{print $1}')
+        pkg_list+=("$pkg")
+        local current_ver=$(echo "$line" | awk '{print $2}' | tr -d '()')
+        local new_ver=$(echo "$line" | awk '{print $4}')
+        if [[ -n "$new_ver" ]]; then
+            upgrade_labels+=("${pkg}-${new_ver}")
+        else
+            upgrade_labels+=("$pkg")
+        fi
+        print_package_row "$pkg" "$ARCH" "${current_ver}->${new_ver}" "@homebrew" "--"
+    done <<< "$outdated_data"
+
+    print_line
+    echo "Transaction Summary"
+    print_line
+
+    local total_pkgs=${#pkg_list[@]}
+    echo "Upgrade  $total_pkgs Packages"
+    echo ""
+
+    echo -n "Is this ok [y/N]: "
+    local response
+    read -r response < /dev/tty
+
+    if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+        echo "\nDownloading Packages:"
+        unsetopt MONITOR BG_NICE 2>/dev/null
+
+        local download_index=1
+        local download_pkg=""
+        local download_label=""
+        local download_total_bytes=0
+        local download_start_seconds=$SECONDS
+        for download_pkg in "${pkg_list[@]}"; do
+            download_label="${upgrade_labels[$download_index]}"
+            HOMEBREW_NO_ENV_HINTS=1 brew fetch "$download_pkg" >/dev/null 2>&1 &
+            if ! show_dnf_download_progress "$download_label" "$download_pkg" "$download_index" "$total_pkgs" $! ; then
+                echo "\n\033[31mError: Failed to download package ${download_pkg}.\033[0m"
+                exit 1
+            fi
+            download_total_bytes=$((download_total_bytes + ${DNF_LAST_DOWNLOAD_BYTES:-0}))
+            ((download_index++))
+        done
+        local download_elapsed=$((SECONDS - download_start_seconds))
+        (( download_elapsed < 1 )) && download_elapsed=1
+        local download_total_size=$(format_dnf_bytes "$download_total_bytes")
+        local download_total_speed="-- B/s"
+        if (( download_total_bytes > 0 )); then
+            download_total_speed="$(format_dnf_bytes $((download_total_bytes / download_elapsed)))/s"
+        fi
+        print_dnf_download_separator
+        print_dnf_download_total "$download_total_speed" "$download_total_size" "$(format_dnf_elapsed "$download_elapsed")"
+
+        echo "Running transaction check"
+        echo "Transaction check succeeded."
+        echo "Running transaction test"
+        echo "Transaction test succeeded."
+        echo "Running transaction"
+        print_dnf_transaction_line "Preparing" "" 1 1
+
+        local index=1
+        local upgrade_pkg=""
+        local upgrade_label=""
+        for upgrade_pkg in "${pkg_list[@]}"; do
+            upgrade_label="${upgrade_labels[$index]}"
+            HOMEBREW_NO_ENV_HINTS=1 brew upgrade -q "$upgrade_pkg" >/dev/null 2>&1 &
+            if ! show_dnf_transaction_progress "Upgrading" "$upgrade_label" "$index" "$total_pkgs" $! ; then
+                echo "\n\033[31mError: Transaction failed while upgrading ${upgrade_pkg}.\033[0m"
+                exit 1
+            fi
+            ((index++))
+        done
+
+        echo "Complete!"
+    else
+        echo "Operation aborted."
+    fi
+}
+
+case "$1" in
+    update)
+        echo "Updating Subscription Management repositories."
+        unsetopt MONITOR BG_NICE 2>/dev/null
+        HOMEBREW_NO_ENV_HINTS=1 brew update -q >/dev/null 2>&1
+        if (( $? != 0 )); then
+            echo "\n\033[31mError: Subscription repository update failed.\033[0m"
+            exit 1
+        fi
+        echo "Metadata cache refreshed successfully."
+        echo "Complete!"
+        run_upgrade
+        ;;
+
+    upgrade)
+        run_upgrade
+        ;;
+
+    search)
+        if [[ -z "$2" ]]; then
+            echo "Error: Search argument required."
+            echo "Usage: $0 search <keyword>"
+            exit 1
+        fi
+        echo "Matched: $2"
+        local search_raw
+        search_raw=$(brew search --eval-all --desc "$2" 2>/dev/null | grep -v '==> Casks')
+        if [[ -z "$search_raw" ]]; then
+            echo "No matches found."
+            exit 0
+        fi
+        print_line
+        printf " %-30s %-12s %-35s\n" "Name" "Arch" "Summary"
+        print_line
+        echo "$search_raw" | while read -r line; do
+            [[ -z "$line" || "$line" =~ "^==>" ]] && continue
+            local name="${line%%:*}"
+            local desc="${line#*:}"
+            desc="$(echo "$desc" | sed -e 's/^[[:space:]]*//')"
+            if (( ${#desc} > 40 )); then desc="${desc:0:37}..."; fi
+            printf " %-30s %-12s %-35s\n" "$name" "$ARCH" "$desc"
+        done
+        ;;
+
+    install)
+        if [[ -z "$2" ]]; then
+            echo "Error: Package name required."
+            echo "Usage: $0 install <package_name>"
+            exit 1
+        fi
+        shift
+        local pkgs=("$@")
+
+        print_header
+        print_line
+        print_package_row "Package" "Arch" "Version" "Repository" "Size"
+        print_line
+
+        for p in "${pkgs[@]}"; do
+            local ver_info
+            ver_info=$(brew info --formula "$p" 2>/dev/null | head -n 1 | awk '{print $3}')
+            if [[ -z "$ver_info" ]]; then ver_info="stable"; fi
+            print_package_row "$p" "$ARCH" "$ver_info" "@homebrew" "--"
+        done
+
+        print_line
+        echo "Transaction Summary"
+        print_line
+        echo "Install  ${#pkgs[@]} Packages"
+        echo ""
+
+        echo -n "Is this ok [y/N]: "
+        local response
+        read -r response < /dev/tty
+        if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+            echo "\nRunning transaction"
+            unsetopt MONITOR BG_NICE 2>/dev/null
+
+            HOMEBREW_NO_ENV_HINTS=1 brew fetch --formula "${pkgs[@]}" >/dev/null 2>&1 &
+            show_progress "Preparing applications for transaction" $!
+
+            HOMEBREW_NO_ENV_HINTS=1 brew install -q "${pkgs[@]}" >/dev/null 2>&1 &
+            show_progress "Installing packages" $!
+
+            print_line
+            echo "Complete!"
+        else
+            echo "Operation aborted."
+        fi
+        ;;
+
+    remove|erase|uninstall)
+        if [[ -z "$2" ]]; then
+            echo "Error: Package name required."
+            echo "Usage: $0 remove <package_name>"
+            exit 1
+        fi
+        shift
+        local pkgs=("$@")
+
+        print_header
+        print_line
+        print_package_row "Package" "Arch" "Version" "Repository" "Size"
+        print_line
+        for p in "${pkgs[@]}"; do
+            print_package_row "$p" "$ARCH" "removing" "@homebrew" "--"
+        done
+        print_line
+        echo "Transaction Summary"
+        print_line
+        echo "Remove  ${#pkgs[@]} Packages"
+        echo ""
+
+        echo -n "Is this ok [y/N]: "
+        local response
+        read -r response < /dev/tty
+        if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+            echo "\nRunning transaction"
+            unsetopt MONITOR BG_NICE 2>/dev/null
+
+            HOMEBREW_NO_ENV_HINTS=1 brew uninstall -q "${pkgs[@]}" >/dev/null 2>&1 &
+            show_progress "Erasing packages" $!
+
+            print_line
+            echo "Complete!"
+        else
+            echo "Operation aborted."
+        fi
+        ;;
+
+    list)
+        local list_raw
+        list_raw=$(brew list --formula -1 2>/dev/null)
+
+        if [[ -z "$list_raw" ]]; then
+            echo "No packages installed."
+            return 0
+        fi
+
+        # 如果提供了可选的过滤关键字（例如 dnf list git）
+        if [[ -n "$2" ]]; then
+            list_raw=$(echo "$list_raw" | grep "$2")
+            if [[ -z "$list_raw" ]]; then
+                echo "No matching packages found."
+                return 0
+            fi
+        fi
+
+        echo "Installed Packages"
+        print_line
+        printf " %-35s %-15s %-20s\n" "Package Name" "Architecture" "Repository"
+        print_line
+
+        echo "$list_raw" | while read -r pkg; do
+            printf " %-35s %-15s %-20s\n" "$pkg" "$ARCH" "@anaconda-or-homebrew"
+        done
+        ;;
+
+    clean)
+        if [[ "$2" == "all" ]]; then
+            echo "Cleaning up Homebrew cache and downloads..."
+            unsetopt MONITOR BG_NICE 2>/dev/null
+            brew cleanup -s >/dev/null 2>&1 &
+            show_progress "Cache repositories cleared successfully" $!
+            rm -rf "$(brew --cache)" 2>/dev/null
+            echo "Complete!"
+        else
+            echo "Usage: $0 clean all"
+        fi
+        ;;
+
+    *)
+        # 展示完美的 DNF 帮助列表
+        echo "Usage: dnf <command> [arguments]"
+        echo ""
+        echo "Available Commands:"
+        echo "  clean             -- Clean cache and old package versions"
+        echo "  install           -- Install a new package"
+        echo "  list              -- List all installed packages"
+        echo "  remove/uninstall  -- Uninstall an installed package"
+        echo "  search            -- Search for packages"
+        echo "  update            -- Update Homebrew repositories (metadata)"
+        echo "  upgrade           -- Upgrade all outdated formulae and casks using DNF style"
+        return 0
+        ;;
+esac
