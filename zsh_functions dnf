@@ -175,6 +175,13 @@ get_brew_cache_bytes() {
     local cache_kb
 
     cache_path=$(brew --cache "$package" 2>/dev/null | head -n 1)
+    # Homebrew downloads into this temporary file before atomically renaming it.
+    # Reading it lets the DNF-style line report live download speed.
+    if [[ -f "${cache_path}.incomplete" ]]; then
+        stat -f %z "${cache_path}.incomplete" 2>/dev/null
+        return
+    fi
+
     if [[ -f "$cache_path" ]]; then
         stat -f %z "$cache_path" 2>/dev/null
         return
@@ -231,16 +238,30 @@ show_dnf_download_progress() {
     local elapsed=0
     local elapsed_text
     local bytes=0
+    local previous_bytes=0
+    local current_bytes=0
+    local interval_seconds=1
     local size_text="-- B"
     local speed_text="-- B/s"
 
     printf "\033[?25l"
     while kill -0 "$pid" 2>/dev/null; do
+        sleep "$interval_seconds"
+
+        current_bytes=$(get_brew_cache_bytes "$package")
+        if [[ "$current_bytes" =~ '^[0-9]+$' ]]; then
+            bytes="$current_bytes"
+            size_text=$(format_dnf_bytes "$bytes")
+            if (( bytes >= previous_bytes )); then
+                speed_text="$(format_dnf_bytes $(((bytes - previous_bytes) / interval_seconds)))/s"
+            fi
+            previous_bytes="$bytes"
+        fi
+
         elapsed=$((SECONDS - start_seconds))
         elapsed_text=$(format_dnf_elapsed "$elapsed")
         printf "\r"
         print_dnf_download_line "$subject" "$index" "$total" "$speed_text" "$size_text" "$elapsed_text" "\033[K"
-        sleep 0.2
     done
 
     wait "$pid"
@@ -292,7 +313,11 @@ print_dnf_download_total() {
 run_upgrade() {
     print_header
     local outdated_data
-    outdated_data=$(brew outdated --verbose 2>/dev/null | sed '/^[[:space:]]*$/d')
+    if ! outdated_data=$(brew outdated --verbose 2>/dev/null); then
+        echo "Error: Failed to check for available upgrades."
+        return 1
+    fi
+    outdated_data=$(print -r -- "$outdated_data" | sed '/^[[:space:]]*$/d')
 
     if [[ -z "$outdated_data" ]]; then
         echo "Nothing to do."
@@ -345,7 +370,7 @@ run_upgrade() {
             HOMEBREW_NO_ENV_HINTS=1 brew fetch "$download_pkg" >/dev/null 2>&1 &
             if ! show_dnf_download_progress "$download_label" "$download_pkg" "$download_index" "$total_pkgs" $! ; then
                 echo "\n\033[31mError: Failed to download package ${download_pkg}.\033[0m"
-                exit 1
+                return 1
             fi
             download_total_bytes=$((download_total_bytes + ${DNF_LAST_DOWNLOAD_BYTES:-0}))
             ((download_index++))
@@ -375,7 +400,7 @@ run_upgrade() {
             HOMEBREW_NO_ENV_HINTS=1 brew upgrade -q "$upgrade_pkg" >/dev/null 2>&1 &
             if ! show_dnf_transaction_progress "Upgrading" "$upgrade_label" "$index" "$total_pkgs" $! ; then
                 echo "\n\033[31mError: Transaction failed while upgrading ${upgrade_pkg}.\033[0m"
-                exit 1
+                return 1
             fi
             ((index++))
         done
@@ -392,8 +417,8 @@ case "$1" in
         unsetopt MONITOR BG_NICE 2>/dev/null
         HOMEBREW_NO_ENV_HINTS=1 brew update -q >/dev/null 2>&1
         if (( $? != 0 )); then
-            echo "\n\033[31mError: Subscription repository update failed.\033[0m"
-            exit 1
+            echo "Error: Failed to download metadata for repo 'homebrew'."
+            return 1
         fi
         echo "Metadata cache refreshed successfully."
         echo "Complete!"
@@ -406,55 +431,132 @@ case "$1" in
 
     search)
         if [[ -z "$2" ]]; then
-            echo "Error: Search argument required."
+            echo "Error: Missing search string."
             echo "Usage: $0 search <keyword>"
-            exit 1
+            return 1
         fi
-        echo "Matched: $2"
         local search_raw
-        search_raw=$(brew search --eval-all --desc "$2" 2>/dev/null | grep -v '==> Casks')
+        local package_type="formula"
+        if ! search_raw=$(brew search --eval-all --desc "$2" 2>/dev/null); then
+            echo "Error: Failed to search available packages."
+            return 1
+        fi
         if [[ -z "$search_raw" ]]; then
             echo "No matches found."
-            exit 0
+            return 0
         fi
+        echo "Matched: $2"
         print_line
         printf " %-30s %-12s %-35s\n" "Name" "Arch" "Summary"
         print_line
         echo "$search_raw" | while read -r line; do
-            [[ -z "$line" || "$line" =~ "^==>" ]] && continue
+            [[ -z "$line" ]] && continue
+            if [[ "$line" == "==> Formulae" ]]; then
+                package_type="formula"
+                continue
+            fi
+            if [[ "$line" == "==> Casks" ]]; then
+                package_type="cask"
+                continue
+            fi
+            [[ "$line" =~ "^==>" ]] && continue
             local name="${line%%:*}"
             local desc="${line#*:}"
             desc="$(echo "$desc" | sed -e 's/^[[:space:]]*//')"
             if (( ${#desc} > 40 )); then desc="${desc:0:37}..."; fi
+            [[ "$package_type" == "cask" ]] && name="${name} (cask)"
             printf " %-30s %-12s %-35s\n" "$name" "$ARCH" "$desc"
         done
         ;;
 
     install)
+        local requested_type="auto"
+        if [[ "$2" == "--formula" || "$2" == "--cask" ]]; then
+            requested_type="${2#--}"
+            shift
+        fi
+
         if [[ -z "$2" ]]; then
-            echo "Error: Package name required."
-            echo "Usage: $0 install <package_name>"
-            exit 1
+            echo "Error: Need to specify at least one package to install."
+            echo "Usage: $0 install [--formula|--cask] <package_name>"
+            return 1
         fi
         shift
         local pkgs=("$@")
+        local formula_pkgs=()
+        local cask_pkgs=()
+        local unavailable_pkgs=()
+        local p
+        local ver_info
+        local info_output
+        local package_type
+        local package_arch
+        local repository
 
         print_header
+
+        for p in "${pkgs[@]}"; do
+            ver_info=""
+            info_output=""
+            package_type=""
+            package_arch="$ARCH"
+            repository="@homebrew"
+
+            if [[ "$requested_type" == "auto" ]]; then
+                if info_output=$(brew info --formula "$p" 2>/dev/null); then
+                    package_type="formula"
+                elif info_output=$(brew info --cask "$p" 2>/dev/null); then
+                    package_type="cask"
+                else
+                    echo "No match for argument: $p"
+                    unavailable_pkgs+=("$p")
+                    continue
+                fi
+            else
+                package_type="$requested_type"
+                if ! info_output=$(brew info "--${package_type}" "$p" 2>/dev/null); then
+                    echo "No match for argument: $p"
+                    unavailable_pkgs+=("$p")
+                    continue
+                fi
+            fi
+
+            if [[ "$package_type" == "cask" ]]; then
+                cask_pkgs+=("$p")
+                ver_info=$(print -r -- "$info_output" | sed -n '1s/^.*: \([^[:space:]]*\).*$/\1/p')
+                package_arch="noarch"
+                repository="@homebrew/cask"
+            else
+                formula_pkgs+=("$p")
+                ver_info=$(print -r -- "$info_output" | head -n 1 | awk '{print $3}')
+            fi
+            if [[ -z "$ver_info" ]]; then ver_info="stable"; fi
+        done
+
+        if (( ${#unavailable_pkgs[@]} > 0 )); then
+            echo "Error: Unable to find a match: ${unavailable_pkgs[*]}"
+            return 1
+        fi
+
         print_line
         print_package_row "Package" "Arch" "Version" "Repository" "Size"
         print_line
-
-        for p in "${pkgs[@]}"; do
-            local ver_info
+        for p in "${formula_pkgs[@]}"; do
             ver_info=$(brew info --formula "$p" 2>/dev/null | head -n 1 | awk '{print $3}')
-            if [[ -z "$ver_info" ]]; then ver_info="stable"; fi
+            [[ -z "$ver_info" ]] && ver_info="stable"
             print_package_row "$p" "$ARCH" "$ver_info" "@homebrew" "--"
+        done
+        for p in "${cask_pkgs[@]}"; do
+            ver_info=$(brew info --cask "$p" 2>/dev/null | sed -n '1s/^.*: \([^[:space:]]*\).*$/\1/p')
+            [[ -z "$ver_info" ]] && ver_info="stable"
+            print_package_row "$p" "noarch" "$ver_info" "@homebrew/cask" "--"
         done
 
         print_line
         echo "Transaction Summary"
         print_line
-        echo "Install  ${#pkgs[@]} Packages"
+        (( ${#formula_pkgs[@]} > 0 )) && echo "Install  ${#formula_pkgs[@]} Formulae"
+        (( ${#cask_pkgs[@]} > 0 )) && echo "Install  ${#cask_pkgs[@]} Casks"
         echo ""
 
         echo -n "Is this ok [y/N]: "
@@ -464,11 +566,37 @@ case "$1" in
             echo "\nRunning transaction"
             unsetopt MONITOR BG_NICE 2>/dev/null
 
-            HOMEBREW_NO_ENV_HINTS=1 brew fetch --formula "${pkgs[@]}" >/dev/null 2>&1 &
-            show_progress "Preparing applications for transaction" $!
+            if (( ${#formula_pkgs[@]} > 0 )); then
+                HOMEBREW_NO_ENV_HINTS=1 brew fetch --formula "${formula_pkgs[@]}" >/dev/null 2>&1 &
+                if ! show_progress "Preparing formula packages" $!; then
+                    echo "\n\033[31mError: Failed to download formula package(s).\033[0m"
+                    return 1
+                fi
+            fi
 
-            HOMEBREW_NO_ENV_HINTS=1 brew install -q "${pkgs[@]}" >/dev/null 2>&1 &
-            show_progress "Installing packages" $!
+            if (( ${#cask_pkgs[@]} > 0 )); then
+                HOMEBREW_NO_ENV_HINTS=1 brew fetch --cask "${cask_pkgs[@]}" >/dev/null 2>&1 &
+                if ! show_progress "Preparing cask packages" $!; then
+                    echo "\n\033[31mError: Failed to download cask package(s).\033[0m"
+                    return 1
+                fi
+            fi
+
+            if (( ${#formula_pkgs[@]} > 0 )); then
+                HOMEBREW_NO_ENV_HINTS=1 brew install -q --formula "${formula_pkgs[@]}" >/dev/null 2>&1 &
+                if ! show_progress "Installing formula packages" $!; then
+                    echo "\n\033[31mError: Failed to install formula package(s).\033[0m"
+                    return 1
+                fi
+            fi
+
+            if (( ${#cask_pkgs[@]} > 0 )); then
+                HOMEBREW_NO_ENV_HINTS=1 brew install -q --cask "${cask_pkgs[@]}" >/dev/null 2>&1 &
+                if ! show_progress "Installing cask packages" $!; then
+                    echo "\n\033[31mError: Failed to install cask package(s).\033[0m"
+                    return 1
+                fi
+            fi
 
             print_line
             echo "Complete!"
@@ -481,7 +609,7 @@ case "$1" in
         if [[ -z "$2" ]]; then
             echo "Error: Package name required."
             echo "Usage: $0 remove <package_name>"
-            exit 1
+            return 1
         fi
         shift
         local pkgs=("$@")
@@ -563,7 +691,8 @@ case "$1" in
         echo ""
         echo "Available Commands:"
         echo "  clean             -- Clean cache and old package versions"
-        echo "  install           -- Install a new package"
+        echo "  install           -- Install formulae and casks automatically"
+        echo "  install --cask    -- Force cask installation"
         echo "  list              -- List all installed packages"
         echo "  remove/uninstall  -- Uninstall an installed package"
         echo "  search            -- Search for packages"
