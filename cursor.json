@@ -1,0 +1,109 @@
+{
+    "window.commandCenter": true,
+    "workbench.productIconTheme": "fluent-icons",
+    "editor.renderWhitespace": "all",
+    "explorer.confirmDelete": false,
+    "editor.scrollbar.horizontalScrollbarSize": 6,
+    "editor.scrollbar.verticalScrollbarSize": 6,
+    "editor.detectIndentation": false,
+    "editor.insertSpaces": false,
+    "editor.tabSize": 8,
+    "workbench.iconTheme": "jetbrains-file-icon-theme-auto",
+    "C_Cpp.default.intelliSenseMode": "macos-clang-x64",
+    "window.restoreWindows": "one",
+    "files.exclude": {
+	"**/.cache": true,
+	"**/.clang-tidy": true,
+	"**/.clangd": true,
+	"**/.codegraph": true,
+	"**/.gitignore": true,
+	"**/.omo": true,
+	"**/*.o": true,
+	"**/compile_commands.json": true
+    },
+    "git.enableSmartCommit": true,
+    "claudeCode.preferredLocation": "panel",
+    "window.autoDetectColorScheme": false,
+
+    "editor.semanticTokenColorCustomizations": {
+        "[Cursor Dark]": {
+            "rules": {
+                "function.declaration": {
+                    "foreground": "#dabca5",
+                    "fontStyle": "bold"
+                },
+                "method.declaration": {
+                    "foreground": "#dabca5",
+                    "fontStyle": "bold"
+                },
+                "function:c": {
+                    "foreground": "#dabca5",
+                    "fontStyle": ""
+                },
+                "function:cpp": {
+                    "foreground": "#dabca5",
+                    "fontStyle": ""
+                },
+                "function.call": {
+                    "foreground": "#dabca5",
+                    "fontStyle": ""
+                },
+                "method.call": {
+                    "foreground": "#dabca5",
+                    "fontStyle": ""
+                },
+                "variable.fileScope:c": {
+                    "foreground": "#BDC9D5",
+                    "fontStyle": "bold"
+                },
+                "variable.fileScope:cpp": {
+                    "foreground": "#BDC9D5",
+                    "fontStyle": "bold"
+                },
+                "variable.functionScope:c": {
+                    "foreground": "#BDC9D5"
+                },
+                "variable.functionScope:cpp": {
+                    "foreground": "#BDC9D5"
+                },
+                "enum": "#87c3ff",
+                "enumMember": {
+                    "foreground": "#AAA0FA",
+                    "fontStyle": "bold"
+                },
+                "type:c": "#82D2CE",
+                "type:cpp": "#82D2CE",
+                "type.globalScope:c": "#82D2CE",
+                "type.globalScope:cpp": "#82D2CE",
+                "class:c": "#82D2CE",
+                "class:cpp": "#82D2CE"
+            }
+        }
+    },
+    "editor.tokenColorCustomizations": {
+        "[Cursor Dark]": {
+            "textMateRules": [
+                {
+                    "scope": [
+                        "meta.function-call.c entity.name.function.c",
+                        "meta.function-call.cpp entity.name.function.cpp"
+                    ],
+                    "settings": {
+                        "foreground": "#dabca5"
+                    }
+                },
+                {
+                    "scope": [
+                        "storage.type.built-in.primitive.c",
+                        "storage.type.built-in.primitive.cpp",
+                        "storage.type.built-in.c",
+                        "storage.type.built-in.cpp"
+                    ],
+                    "settings": {
+                        "foreground": "#82D2CE"
+                    }
+                }
+            ]
+        }
+    }
+}
